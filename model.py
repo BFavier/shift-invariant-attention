@@ -35,9 +35,9 @@ class ShiftInvariantAttention(torch.nn.Module):
         self.k_projection = torch.nn.Linear(D, n_heads * projection_dim)
         self.v_projection = torch.nn.Linear(D, n_heads * projection_dim)
         self.p_projection = torch.nn.Linear(position_dim, n_heads * projection_dim)
-        self.expand = torch.nn.Linear(projection_dim, 2*projection_dim)
+        self.expand = torch.nn.Linear(D, 2*D)
         self.activation = activation
-        self.contract = torch.nn.Linear(2*projection_dim, projection_dim)
+        self.contract = torch.nn.Linear(2*D, D)
         self.batch_norm = torch.nn.BatchNorm1d(D)
 
     def forward(self, Q: torch.Tensor, K: torch.Tensor, Pq: torch.Tensor, Pk: torch.Tensor,
@@ -74,17 +74,18 @@ class ShiftInvariantAttention(torch.nn.Module):
         """
         N, S, Lq, D = Q.shape
         N, S, Lk, D = K.shape
-        q = self.q_projection(Q).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lq, projection_dim)
-        k = self.k_projection(K).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
-        v = self.v_projection(K).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
+        N, S, Lq, P = Pq.shape
+        q = self.q_projection(Q).reshape(N, Q.shape[1], Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, 1|S, n_heads, Lq, projection_dim)
+        k = self.k_projection(K).reshape(N, Q.shape[1], Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, 1|S, n_heads, Lk, projection_dim)
+        v = self.v_projection(K).reshape(N, Q.shape[1], Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, 1|S, n_heads, Lk, projection_dim)
         pq = self.p_projection(Pq).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
         pk = self.p_projection(Pk).reshape(N, S, Lk, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
-        b = self.projection.bias.reshape(1, 1, 1, 1, self.projection_dim)  # shape (1, 1, 1, 1, projection_dim)
-        S = self.score_matrix(q, k, torch.sin(pq), torch.cos(pk - b)) - self.score_matrix(q, k, torch.cos(pq), torch.sin(pk - b))  # shape (N, S, n_heads, Lq, Lk)
+        b = self.p_projection.bias.reshape(1, 1, self.n_heads, 1, self.projection_dim)  # shape (1, 1, n_heads, 1, projection_dim)
+        s = self.score_matrix(q, k, torch.sin(pq), torch.cos(pk - b)) - self.score_matrix(q, k, torch.cos(pq), torch.sin(pk - b))  # shape (N, S, n_heads, Lq, Lk)
         if K_padding_mask is not None:  # masking padding
-            S = torch.masked_fill(S, K_padding_mask.reshape(N, 1, 1, 1, Lk), -float("inf"))
-        S = torch.softmax(S, dim=-1)
-        T = torch.matmul(S, v) # shape (N, S, n_heads, Lq, projection_dim)
+            s = torch.masked_fill(s, K_padding_mask.reshape(N, 1, 1, 1, Lk), -float("inf"))
+        s = torch.softmax(s, dim=-1)
+        T = torch.matmul(s, v) # shape (N, S, n_heads, Lq, projection_dim)
         T = T.permute(0, 1, 3, 2, 4).reshape(N, S, Lq, D)  # shape (N, S, Lq, D)
         T = self.contract(self.activation(self.expand(T)))
         T = Q + self.batch_norm(T.reshape(-1, D)).reshape(N, S, Lq, D)
@@ -183,7 +184,7 @@ class ShiftInvariantTransformer(torch.nn.Module):
                 X = stage(X, X, P, P, padding_mask)  # shape (N, S, Lq, D)
         # masking padding observations
         X = torch.masked_fill(X, padding_mask.unsqueeze(-1), -float("inf"))
-        X = X.reshape(N, -1, D).max(dim=1)
+        X = X.reshape(N, -1, D).max(dim=1).values
         return torch.sigmoid(self.contract(X))
 
     def loss(self, c: torch.Tensor, i: torch.Tensor, w: torch.Tensor, t: torch.Tensor, padding_mask : torch.tensor) -> torch.Tensor:

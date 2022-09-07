@@ -12,9 +12,9 @@ class Batchifyer:
     def __repr__(self) -> str:
         return "Batchifyer(x="+repr(self.x)+", y="+repr(self.y)+", batch_size={self.batch_size}, n_batches={self.n_batches})" 
 
-    def __init__(self, x, y, n_batches: Optional[int] = None, batch_size: Optional[int] = None, shuffle: bool = True, device: torch.device = "cpu"):
+    def __init__(self, x, y, classes: list[str], n_batches: Optional[int] = None, batch_size: Optional[int] = None, shuffle: bool = True, device: torch.device = "cpu"):
         self.x = x_to_tensors(x, device)
-        self.y = y_to_tensors(y, device)
+        self.y = y_to_tensors(y, classes, device)
         self.device = device
         self.n_batches = n_batches
         self.batch_size = batch_size
@@ -29,10 +29,10 @@ class Batchifyer:
             else:
                 indexes = torch.arange(len(self.y), device=self.device)
             if self.batch_size is not None:
-                n_batches = range(len(self.y) // self.batch_size)
+                n_batches = len(self.y) // self.batch_size
                 if self.n_batches is not None:
                     n_batches = min(self.n_batches, n_batches)
-                batches = (indexes[i*self.batch_size:(i+1)*self.batch_size] for i in n_batches)
+                batches = (indexes[i*self.batch_size:(i+1)*self.batch_size] for i in range(n_batches))
                 return ((tuple(_x[batch] for _x in self.x), self.y[batch]) for batch in batches)
             elif self.n_batches is not None:
                 batches = np.array_split(indexes, self.n_batches)
