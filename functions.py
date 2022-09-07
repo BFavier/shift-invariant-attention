@@ -1,9 +1,45 @@
-from typing import Iterable
+from typing import Iterable, Iterator
 from copy import deepcopy
+from typing import Optional
+import numpy as np
 import torch
 
+from dataset import x_to_tensors, y_to_tensors
 
-def train_loop(model: torch.nn.Module, optimizer: torch.optim.Optimizer, train_data: Iterable, val_data: Iterable, n_steps: int, patience: int):
+
+class Batchifyer:
+
+    def __repr__(self) -> str:
+        return "Batchifyer(x="+repr(self.x)+", y="+repr(self.y)+", batch_size={self.batch_size}, n_batches={self.n_batches})" 
+
+    def __init__(self, x, y, n_batches: Optional[int] = None, batch_size: Optional[int] = None, shuffle: bool = True, device: torch.device = "cpu"):
+        self.x = x_to_tensors(x, device)
+        self.y = y_to_tensors(y, device)
+        self.device = device
+        self.n_batches = n_batches
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+
+    def __iter__(self) -> Iterator:
+        if self.batch_size is None and self.n_batches is None:
+            return ((x, y) for x, y in ((self.x, self.y),))
+        else:
+            if self.shuffle:
+                indexes = torch.randperm(len(self.y), device=self.device)
+            else:
+                indexes = torch.arange(len(self.y), device=self.device)
+            if self.batch_size is not None:
+                n_batches = range(len(self.y) // self.batch_size)
+                if self.n_batches is not None:
+                    n_batches = min(self.n_batches, n_batches)
+                batches = (indexes[i*self.batch_size:(i+1)*self.batch_size] for i in n_batches)
+                return ((tuple(_x[batch] for _x in self.x), self.y[batch]) for batch in batches)
+            elif self.n_batches is not None:
+                batches = np.array_split(indexes, self.n_batches)
+                return ((tuple(_x[batch] for _x in self.x), self.y[batch]) for batch in batches)
+
+
+def train_loop(model: torch.nn.Module, optimizer: torch.optim.Optimizer, train_data: Batchifyer, val_data: Batchifyer, n_steps: int, patience: int):
     best_state = deepcopy(model.state_dict())
     best_step = 0
     best_loss = float("inf")

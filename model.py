@@ -27,7 +27,7 @@ class ShiftInvariantAttention(torch.nn.Module):
         activation : Callable
             activation function
         """
-        super().__init__(self)
+        super().__init__()
         self.n_heads = n_heads
         self.projection_dim = projection_dim
         D = projection_dim * n_heads
@@ -72,8 +72,8 @@ class ShiftInvariantAttention(torch.nn.Module):
         torch.Tensor :
             tensor T of transformed queries of shape (N, S, Lq, D)
         """
-        N, Lq, D = Q.shape
-        N, Lk, D = K.shape
+        N, S, Lq, D = Q.shape
+        N, S, Lk, D = K.shape
         q = self.q_projection(Q).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lq, projection_dim)
         k = self.k_projection(K).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
         v = self.v_projection(K).reshape(N, S, Lq, self.n_heads, self.projection_dim).permute(0, 1, 3, 2, 4)  # shape (N, S, n_heads, Lk, projection_dim)
@@ -144,7 +144,7 @@ class ShiftInvariantTransformer(torch.nn.Module):
         D = projection_dim*n_heads
         self.classes = classes
         self.low_memory = low_memory
-        self.t_scaling_factors = torch.tensor(t_scaling_factors, dtype=torch.float).reshape(1, -1, 1, 1)  # shape (1, S, 1, 1)
+        self.t_scaling_factors = torch.tensor(t_scaling_factors, dtype=torch.float).reshape(1, -1, 1)  # shape (1, S, 1)
         self.expand = torch.nn.Linear(1, D)
         self.stages = torch.nn.ModuleList()
         for _ in range(n_stages):
@@ -174,7 +174,8 @@ class ShiftInvariantTransformer(torch.nn.Module):
         D = self.projection_dim * self.n_heads
         padding_mask = padding_mask.unsqueeze(1)
         X = self.expand(i.unsqueeze(-1)).unsqueeze(1)  # shape (N, 1, Lq, D)
-        P = torch.stack([w.unsqueeze(1), t*self.t_scaling_factors], dim=-1)  # shape (N, S, Lq, 2)
+        _, S, _ = self.t_scaling_factors.shape
+        P = torch.stack([w.unsqueeze(1).expand(-1, S, -1), t.unsqueeze(1)*self.t_scaling_factors.to(t.device)], dim=-1)  # shape (N, S, Lq, 2)
         for stage in self.stages:
             if self.low_memory and self.training:
                 X = checkpoint(stage, X, X, P, P, padding_mask)  # shape (N, S, Lq, D)
