@@ -1,5 +1,6 @@
 from model import ShiftInvariantTransformer
 from dataset import generate_dataset, draw_dataset_sample, x_to_tensors, y_to_tensors
+from functions import train_loop
 
 
 x_train, y_train = generate_dataset(n=700)

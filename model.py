@@ -1,7 +1,9 @@
 from typing import Optional, Callable
+import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
+from dataset import x_to_tensors
 
 
 class ShiftInvariantAttention(torch.nn.Module):
@@ -207,3 +209,19 @@ class ShiftInvariantTransformer(torch.nn.Module):
         counts = c.sum(dim=0)  # shape (C,)
         weights = counts.sum() / (counts + 1.0E-9)  # shape (C,)
         return F.binary_cross_entropy(self(i, w, t, padding_mask), c, weight=weights.unsqueeze(0))
+    
+    def predict(self, dfs: list[pd.DataFrame]) -> pd.DataFrame:
+        """
+        predict the class of each of the given dataframes
+        """
+        self.eval()
+        if isinstance(dfs, pd.DataFrame):
+            dfs = [dfs]
+        X = x_to_tensors(dfs, device=self.device)
+        with torch.no_grad():
+            Y = self(X)
+        return pd.DataFrame(data=Y.cpu().numpy(), columns=self.classes)
+
+    @property
+    def device(self) -> torch.device:
+        return self.contract.weight.device
