@@ -52,7 +52,7 @@ class Shape:
         ax.set_aspect("equal")
 
 
-def generate_crosses(n: int) -> list[Shape]:
+def _generate_crosses(n: int) -> list[Shape]:
     """
     generate n crosses shapes
     """
@@ -71,7 +71,7 @@ def generate_crosses(n: int) -> list[Shape]:
 
     
 
-def generate_squares(n: int) -> list[Shape]:
+def _generate_squares(n: int) -> list[Shape]:
     """
     generate n square shapes
     """
@@ -90,7 +90,7 @@ def generate_squares(n: int) -> list[Shape]:
     return [Shape(p1, p2) for p1, p2 in zip(P1, P2)]
 
 
-def generate_cloud(shape: Shape) -> pd.DataFrame:
+def _generate_cloud(shape: Shape) -> pd.DataFrame:
     """
     generate a cloud of points
     """
@@ -108,7 +108,7 @@ def generate_dataset(n: int) -> tuple[list[pd.DataFrame], list[str]]:
     """
     n_squares = int(round(0.8*n))
     n_crosses = n - n_squares
-    x = [generate_cloud(shape) for shapes in [generate_squares(n_squares), generate_crosses(n_crosses)] for shape in shapes]
+    x = [_generate_cloud(shape) for shapes in [_generate_squares(n_squares), _generate_crosses(n_crosses)] for shape in shapes]
     y = ["square"]*n_squares + ["cross"]*n_crosses
     indexes = np.random.permutation(len(x))
     return [x[i] for i in indexes], [y[i] for i in indexes]
@@ -127,6 +127,26 @@ def draw_dataset_sample(x: list[pd.DataFrame], y: list[str]):
             ax.set_title(_y)
             ax.axis("off")
     plt.show()
+
+
+def x_to_tensors(x: list[pd.DataFrame], device: torch.device = "cpu") -> tuple[torch.Tensor]:
+    """
+    converts x into tensors (i, w, t, padding_mask)
+    """
+    lengths = [len(df) for df in x]
+    L = max(len(df) for df in x)
+    padding_mask = torch.tensor([[i < length for i in range(L)] for length in lengths], dtype=torch.bool, device=device)
+    i = torch.tensor([df["i"].tolist() + [0]*(L-length) for df, length in zip(x, lengths)], dtype=torch.float32, device=device)
+    w = torch.tensor([df["w"].tolist() + [0]*(L-length) for df, length in zip(x, lengths)], dtype=torch.float32, device=device)
+    t = torch.tensor([df["t"].tolist() + [0]*(L-length) for df, length in zip(x, lengths)], dtype=torch.float32, device=device)
+    return i, w, t, padding_mask
+
+
+def y_to_tensors(y: list[str], classes: list[str], device: torch.device = "cpu") -> tuple[torch.Tensor]:
+    """
+    converts y to tensor of shape (N, n_classes) of 1 and 0
+    """
+    return torch.tensor([[index == target for index in classes] for target in y], dtype=torch.float32, device=device)
 
 
 if __name__ == "__main__":
