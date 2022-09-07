@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
+from typing import Optional
 import torch
 
 
@@ -12,6 +14,7 @@ class Shape:
     def __init__(self, P1: np.ndarray, P2: np.ndarray):
         """
         (P1, P2) are the first and second point of each segment
+        arrays of shape (N, 2)
         """
         self.P1 = np.array(P1)
         self.P2 = np.array(P2)
@@ -19,6 +22,16 @@ class Shape:
     def distance(self, P: np.ndarray) -> np.ndarray:
         """
         distance between each point P and the closest segment of the shape
+
+        Parameters
+        ----------
+        P : np.ndarray
+            array of shape (N, 2)
+        
+        Returns
+        -------
+        np.ndarray :
+            array of min distances of shape (N,)
         """
         P = np.array(P)[:, None, :]
         P1, P2 = self.P1[None, ...], self.P2[None, ...]
@@ -26,51 +39,100 @@ class Shape:
         d2 = np.linalg.norm(P2 - P, axis=-1)
         v = P - P1
         v12 = P2 - P1
-        vl = np.sum(v * v12, axis=-1)/np.linalg.norm(v12, axis=-1)**2 * v12
-        vt = v - vl
-        d = np.linalg.norm(vt)
-        return np.minimum(np.minimum(d1, d2), d).min(axis=1)
+        scale = np.sum(v * v12, axis=-1)/np.linalg.norm(v12, axis=-1)**2
+        Pd = np.clip(scale[..., None], 0, 1) * v12 + P1
+        d = np.linalg.norm(P - Pd, axis=-1)
+        return d.min(axis=1)
+
+    def draw(self, ax: Optional[Axes] = None):
+        if ax is None:
+            ax = plt.gca()
+        for p1, p2 in zip(self.P1, self.P2):
+            ax.plot(*zip(p1, p2), color="k")
+        ax.set_aspect("equal")
 
 
 def generate_crosses(n: int) -> list[Shape]:
     """
     generate n crosses shapes
     """
-    P1 = np.array([[(-1, -1), (-1, 1)]])
-    P2 = np.array([[(1, 1), (1, -1)]])
-    theta = np.random.uniform(0., 2*np.pi, (n, 1))
-    rot = np.stack([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)], axis=-1).reshape(n, 2, 2)
-    P1 = (rot @ P1 + 1) / 2
-    P2 = (rot @ P2 + 1) / 2
-    fact = np.random.uniform(0.2, 1., (n, 1, 1))
-    offset = np.random.uniform(0., 1-fact, (n, 1, 2))
+    P1 = np.array([(-1, 0), (0, 1)])[None, ...]
+    P2 = np.array([(1, 0), (0, -1)])[None, ...]
+    theta = np.random.uniform(0., 2*np.pi, n)
+    rot = np.stack([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)], axis=-1).reshape(n, 1, 2, 2)
+    P1 = (rot @ P1[..., None] + 1) / 2
+    P2 = (rot @ P2[..., None] + 1) / 2
+    P1, P2 = P1[..., 0], P2[..., 0]
+    fact = np.random.uniform(0.2, 2., (n, 1, 1))
+    offset = np.random.uniform(0., 2-fact, (n, 1, 2))
     P1 = fact*P1 + offset
     P2 = fact*P2 + offset
     return [Shape(p1, p2) for p1, p2 in zip(P1, P2)]
 
     
 
-def generate_squares() -> list[Shape]:
+def generate_squares(n: int) -> list[Shape]:
     """
     generate n square shapes
     """
-    P1 = np.array([[(-1, -1), (-1, 1)]])
-    P2 = np.array([[(1, 1), (1, -1)]])
-    theta = np.random.uniform(0., 2*np.pi, (n, 1))
-    rot = np.stack([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)], axis=-1).reshape(n, 2, 2)
-    P1 = (rot @ P1 + 1) / 2
-    P2 = (rot @ P2 + 1) / 2
+    Ps = [(-1, 0), (0, 1), (1, 0), (0, -1)]
+    P1 = np.array(Ps)[None, ...]
+    P2 = np.array(Ps[1:]+[Ps[0]])[None, ...]
+    theta = np.random.uniform(0., 2*np.pi, n)
+    rot = np.stack([np.cos(theta), -np.sin(theta), np.sin(theta), np.cos(theta)], axis=-1).reshape(n, 1, 2, 2)
+    P1 = (rot @ P1[..., None] + 1) / 2
+    P2 = (rot @ P2[..., None] + 1) / 2
+    P1, P2 = P1[..., 0], P2[..., 0]
     fact = np.random.uniform(0.2, 1., (n, 1, 1))
     offset = np.random.uniform(0., 1-fact, (n, 1, 2))
     P1 = fact*P1 + offset
     P2 = fact*P2 + offset
     return [Shape(p1, p2) for p1, p2 in zip(P1, P2)]
 
-def generate_shapes() -> list[tuple[pd.DataFrame, str]]:
-    pass
+
+def generate_cloud(shape: Shape) -> pd.DataFrame:
+    """
+    generate a cloud of points
+    """
+    P = np.random.uniform(0, 2, (np.random.randint(1200, 2000), 2))
+    d = shape.distance(P)
+    w = P[..., 0]
+    t = P[..., 1]
+    i = np.exp(-d*2)
+    return pd.DataFrame.from_dict({"i": i, "w": w, "t": t})
+
+
+def generate_dataset(n: int) -> tuple[list[pd.DataFrame], list[str]]:
+    """
+    generate a dataset of cloud observations
+    """
+    n_squares = int(round(0.8*n))
+    n_crosses = n - n_squares
+    x = [generate_cloud(shape) for shapes in [generate_squares(n_squares), generate_crosses(n_crosses)] for shape in shapes]
+    y = ["square"]*n_squares + ["cross"]*n_crosses
+    indexes = np.random.permutation(len(x))
+    return [x[i] for i in indexes], [y[i] for i in indexes]
+
+
+def draw_dataset_sample(x: list[pd.DataFrame], y: list[str]):
+    """
+    draw a sample of the generated dataset
+    """
+    x, y = iter(x), iter(y)
+    f, axes = plt.subplots(figsize=[4*3, 4*2], ncols=3, nrows=2)
+    for row in axes:
+        for ax in row:
+            _x, _y = next(x), next(y)
+            ax.scatter(_x["w"], _x["t"], c=_x["i"], marker=".", cmap="inferno")
+            ax.set_title(_y)
+            ax.axis("off")
+    plt.show()
+
 
 if __name__ == "__main__":
     import IPython
-    s = Shape([[0, 0]], [[2, 2]])
-    d = s.distance([[0, 2]])
+    shape = Shape([(0., 0.)], [(1., 1.)])
+    d = shape.distance([(-1., -1.)])
+    x, y = generate_dataset(20)
+    draw_dataset_sample(x, y)
     IPython.embed()
