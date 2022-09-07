@@ -209,7 +209,7 @@ class ShiftInvariantTransformer(torch.nn.Module):
         """
         c = c.float()
         counts = c.sum(dim=0)  # shape (C,)
-        weights = counts.sum() / (counts + 1.0E-9)  # shape (C,)
+        weights = counts.sum() / (counts + 1.0E-3)  # shape (C,)
         return F.binary_cross_entropy(self(i, w, t, padding_mask), c, weight=weights.unsqueeze(0))
     
     def predict(self, dfs: list[pd.DataFrame]) -> pd.DataFrame:
