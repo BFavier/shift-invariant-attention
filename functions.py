@@ -50,6 +50,7 @@ def train_loop(model: torch.nn.Module, optimizer: torch.optim.Optimizer, train_d
             model.train()
             losses = []
             for batch in train_data:
+                torch.cuda.empty_cache()
                 x, y = batch
                 loss = model.loss(y, *x)
                 loss.backward()
@@ -60,6 +61,7 @@ def train_loop(model: torch.nn.Module, optimizer: torch.optim.Optimizer, train_d
             losses = []
             with torch.no_grad():
                 for batch in val_data:
+                    torch.cuda.empty_cache()
                     x, y = batch
                     loss = model.loss(y, *x).item()
                     losses.append(loss)

@@ -83,8 +83,8 @@ def _generate_squares(n: int) -> list[Shape]:
     P1 = (rot @ P1[..., None] + 1) / 2
     P2 = (rot @ P2[..., None] + 1) / 2
     P1, P2 = P1[..., 0], P2[..., 0]
-    fact = np.random.uniform(0.2, 1., (n, 1, 1))
-    offset = np.random.uniform(0., 1-fact, (n, 1, 2))
+    fact = np.random.uniform(0.5, 1., (n, 1, 1))
+    offset = np.random.uniform(0., 2-fact, (n, 1, 2))
     P1 = fact*P1 + offset
     P2 = fact*P2 + offset
     return [Shape(p1, p2) for p1, p2 in zip(P1, P2)]
@@ -94,7 +94,7 @@ def _generate_cloud(shape: Shape) -> pd.DataFrame:
     """
     generate a cloud of points
     """
-    P = np.random.uniform(0, 2, (np.random.randint(1200, 2000), 2))
+    P = np.random.uniform(0, 2, (np.random.randint(500, 600), 2))
     d = shape.distance(P)
     w = P[..., 0]
     t = P[..., 1]

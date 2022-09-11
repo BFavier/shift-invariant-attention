@@ -1,3 +1,4 @@
+from multiprocessing.sharedctypes import Value
 from typing import Optional, Callable
 import pandas as pd
 import torch
@@ -5,6 +6,21 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 from dataset import x_to_tensors
 
+
+class FeedForward(torch.nn.Module):
+
+    def __init__(self, in_features: int, out_features: int, hidden_layers: list[int]):
+        super().__init__()
+        self.layers = torch.nn.ModuleList()
+        for out in hidden_layers:
+            self.layers.append(torch.nn.Linear(in_features, out))
+            in_features = out
+        self.output = torch.nn.Linear(out, out_features)
+    
+    def forward(self, X):
+        for layer in self.layers:
+            X = torch.relu(layer(X))
+            return self.output(X)
 
 class ShiftInvariantAttention(torch.nn.Module):
     """
@@ -31,14 +47,14 @@ class ShiftInvariantAttention(torch.nn.Module):
         self.n_heads = n_heads
         self.projection_dim = projection_dim
         D = projection_dim * n_heads
-        self.q_projection = torch.nn.Linear(D, n_heads * projection_dim)
-        self.k_projection = torch.nn.Linear(D, n_heads * projection_dim)
-        self.v_projection = torch.nn.Linear(D, n_heads * projection_dim)
-        self.p_projection = torch.nn.Linear(position_dim, n_heads * projection_dim)
+        self.q_projection = torch.nn.Linear(D, n_heads * projection_dim, bias=False)
+        self.k_projection = torch.nn.Linear(D, n_heads * projection_dim, bias=False)
+        self.v_projection = torch.nn.Linear(D, n_heads * projection_dim, bias=False)
+        self.p_projection = torch.nn.Linear(position_dim, n_heads * projection_dim, bias=False)
         self.expand = torch.nn.Linear(D, 2*D)
         self.activation = activation
         self.contract = torch.nn.Linear(2*D, D)
-        self.batch_norm = torch.nn.BatchNorm1d(D)
+        self.norm = torch.nn.LayerNorm(D)
 
     def forward(self, Q: torch.Tensor, K: torch.Tensor, Pq: torch.Tensor, Pk: torch.Tensor,
                 K_padding_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -83,12 +99,14 @@ class ShiftInvariantAttention(torch.nn.Module):
         b = self.p_projection.bias.reshape(1, 1, self.n_heads, 1, self.projection_dim)  # shape (1, 1, n_heads, 1, projection_dim)
         s = self.score_matrix(q, k, torch.sin(pq), torch.cos(pk - b)) - self.score_matrix(q, k, torch.cos(pq), torch.sin(pk - b))  # shape (N, S, n_heads, Lq, Lk)
         if K_padding_mask is not None:  # masking padding
-            s = torch.masked_fill(s, K_padding_mask.reshape(N, 1, 1, 1, Lk), -float("inf"))
-        s = torch.softmax(s, dim=-1)
+            s = torch.masked_fill(s, K_padding_mask.reshape(N, 1, 1, 1, Lk), -1.0E36)
+        s = torch.softmax(s/D**0.5, dim=-1)
         T = torch.matmul(s, v) # shape (N, S, n_heads, Lq, projection_dim)
         T = T.permute(0, 1, 3, 2, 4).reshape(N, S, Lq, D)  # shape (N, S, Lq, D)
         T = self.contract(self.activation(self.expand(T)))
-        T = Q + self.batch_norm(T.reshape(-1, D)).reshape(N, S, Lq, D)
+        # T = Q + self.norm(T.reshape(-1, D)).reshape(N, S, Lq, D)
+        if torch.isnan(T).any():
+            raise ValueError()
         return T
 
     def score_matrix(self, q: torch.Tensor, k: torch.Tensor, pq: torch.Tensor, pk: torch.Tensor) -> torch.Tensor:
@@ -146,7 +164,7 @@ class ShiftInvariantTransformer(torch.nn.Module):
         self.classes = classes
         self.low_memory = low_memory
         self.t_scaling_factors = torch.tensor(t_scaling_factors, dtype=torch.float).reshape(1, -1, 1)  # shape (1, S, 1)
-        self.expand = torch.nn.Linear(1, D)
+        self.expand = FeedForward(1, D, [projection_dim])
         self.stages = torch.nn.ModuleList()
         for _ in range(n_stages):
             self.stages.append(ShiftInvariantAttention(projection_dim, n_heads, 2, activation))
@@ -183,9 +201,9 @@ class ShiftInvariantTransformer(torch.nn.Module):
             else:
                 X = stage(X, X, P, P, padding_mask)  # shape (N, S, Lq, D)
         # masking padding observations
-        X = torch.masked_fill(X, padding_mask.unsqueeze(-1), -float("inf"))
+        X = torch.masked_fill(X, padding_mask.unsqueeze(-1), -10)
         X = X.reshape(N, -1, D).max(dim=1).values
-        return torch.sigmoid(self.contract(X))
+        return torch.softmax(self.contract(X), dim=-1)
 
     def loss(self, c: torch.Tensor, i: torch.Tensor, w: torch.Tensor, t: torch.Tensor, padding_mask : torch.tensor) -> torch.Tensor:
         """
@@ -209,8 +227,15 @@ class ShiftInvariantTransformer(torch.nn.Module):
         """
         c = c.float()
         counts = c.sum(dim=0)  # shape (C,)
-        weights = counts.sum() / (counts + 1.0E-3)  # shape (C,)
-        return F.binary_cross_entropy(self(i, w, t, padding_mask), c, weight=weights.unsqueeze(0))
+        weights = 1 / (counts + 1.0E-3)  # shape (C,)
+        weights = weights / weights.mean()
+        y = self(i, w, t, padding_mask)
+        if not (y >= 0).all() and (y <= 1).all():
+            raise ValueError("unexpected value range")
+        if not (c >= 0).all() and (c <= 1).all():
+            raise ValueError("unexpected value range")
+
+        return F.binary_cross_entropy(y, c, weight=weights.unsqueeze(0))
     
     def predict(self, dfs: list[pd.DataFrame]) -> pd.DataFrame:
         """
@@ -221,7 +246,7 @@ class ShiftInvariantTransformer(torch.nn.Module):
             dfs = [dfs]
         X = x_to_tensors(dfs, device=self.device)
         with torch.no_grad():
-            Y = self(X)
+            Y = self(*X)
         return pd.DataFrame(data=Y.cpu().numpy(), columns=self.classes)
 
     @property
